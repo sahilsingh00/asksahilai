@@ -8,49 +8,51 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# 🔹 PASTE YOUR GOOGLE SCRIPT URL HERE
+# Google Sheet Logging URL
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdXrvhSPFdHberD2ruE4yxiTRfYwo2oKxRNPZH543H53nF1GjPeJNtqJimFMXivDbiXw/exec"
 
-# Groq AI client
+# Groq client
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- TEXT CLEANER ----------
+# -------- CLEAN RESPONSE ----------
 def clean_text(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = text.replace("```", "")
     return text
 
 
-# ---------- START INTRO ----------
+# -------- START INTRO ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
 
     intro = f"""
 Hello {user},
 
-I am *Sahil Singh*, creator of the AskSahilAI assistant.
+I am Sahil Singh, creator of AskSahilAI.
 
-This AI assistant is designed to help students with:
-• Programming and coding
-• Academic concepts
-• Final year projects
+This assistant can help you with:
+• Study doubts
+• Coding & programming
 • Career guidance
+• Project ideas
+• Personal guidance & motivation
 
-You can type your question directly, or use:
+You can chat normally with me or ask any question.
 
-/help – list commands
-/notes – study resources
-/projectideas – project suggestions
+Use:
+/help – see features
+/notes – study material
+/projectideas – project ideas
 /roadmap – learning path
 """
 
-    await update.message.reply_text(intro, parse_mode="Markdown")
+    await update.message.reply_text(intro)
 
 
-# ---------- HELP ----------
+# -------- HELP ----------
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 Available Commands:
@@ -59,12 +61,16 @@ Available Commands:
 /projectideas - Final year project ideas
 /roadmap - Programming learning path
 
-You can also ask any academic or technical question.
+You can also ask:
+• Study questions
+• Career confusion
+• Motivation or stress help
+• Normal conversation
 """
     await update.message.reply_text(text)
 
 
-# ---------- NOTES ----------
+# -------- NOTES ----------
 async def notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 Study Resources:
@@ -84,7 +90,7 @@ https://www.geeksforgeeks.org/data-structures/
     await update.message.reply_text(text)
 
 
-# ---------- PROJECT IDEAS ----------
+# -------- PROJECT IDEAS ----------
 async def projectideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 Final Year Project Ideas:
@@ -99,7 +105,7 @@ Final Year Project Ideas:
     await update.message.reply_text(text)
 
 
-# ---------- ROADMAP ----------
+# -------- ROADMAP ----------
 async def roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 Programming Roadmap:
@@ -114,13 +120,13 @@ Step 6: Apply for Internship
     await update.message.reply_text(text)
 
 
-# ---------- AI CHAT ----------
+# -------- AI CHAT ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user = update.effective_user.first_name
     userid = update.effective_user.id
 
-    # 📊 SEND DATA TO GOOGLE SHEET
+    # ---- LOG USER DATA TO GOOGLE SHEET ----
     try:
         data = {
             "userid": userid,
@@ -134,22 +140,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.3,
+            temperature=0.5,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are AskSahilAI created by Sahil Singh. "
-                        "You are an intelligent assistant for students. "
-                        "You can both chat normally AND help in studies."
+                        "You are AskSahilAI created by Sahil Singh, a student life assistant AI. "
 
-                        "If the user greets or talks casually, respond in a friendly natural way."
-                        "If the user asks academic, coding, project, or career questions, respond like a teacher with structured explanation."
+                        "You can do both normal conversation and serious help."
 
-                        "Be polite, clear, and helpful."
-                        "Do not flirt, do not use inappropriate language."
-                        "Keep answers concise but informative."
-                ),
+                        "If user greets, chat normally and politely."
+
+                        "If user asks study, coding, or career questions, explain like a teacher in clear simple English."
+
+                        "If user shares personal problems (stress, sadness, family issues, confusion), respond supportively like a mentor. "
+                        "Give practical suggestions, motivation, and step-by-step advice."
+
+                        "Never flirt, never insult, never use inappropriate language."
+
+                        "If user shows severe emotional distress, encourage them to talk to a trusted person like a friend, parent, teacher, or counselor."
+
+                        "Keep answers clear, structured, and easy to understand."
+                    ),
                 },
                 {"role": "user", "content": user_text},
             ],
@@ -165,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 
-# ---------- BOT RUN ----------
+# -------- RUN BOT ----------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
