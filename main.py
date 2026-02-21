@@ -1,31 +1,34 @@
 import os
-from google import genai
+from openai import OpenAI
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Gemini new client
-client = genai.Client(api_key=GEMINI_API_KEY)
+# Groq client
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Hello! Main AskSahilAI hoon.\nKuch bhi pucho 🙂"
+        "👋 Hello! Main AskSahilAI hoon 🤖\nKuch bhi pucho!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=user_text,
+        chat = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": user_text}]
         )
-        reply = response.text
+        reply = chat.choices[0].message.content
     except Exception as e:
         print(e)
-        reply = "⚠️ Thoda issue aa raha hai, 10 sec baad fir try karo."
+        reply = "Thoda busy hoon, 5 sec baad try karo."
 
     await update.message.reply_text(reply)
 
@@ -35,5 +38,4 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
-
 app.run_polling()
