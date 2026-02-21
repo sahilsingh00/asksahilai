@@ -1,5 +1,6 @@
 import os
 import re
+import requests
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -7,16 +8,19 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# 🔹 PASTE YOUR GOOGLE SCRIPT URL HERE
+GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdXrvhSPFdHberD2ruE4yxiTRfYwo2oKxRNPZH543H53nF1GjPeJNtqJimFMXivDbiXw/exec"
+
 # Groq AI client
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- FORMAT FIX (removes **bold** issue) ----------
+# ---------- TEXT CLEANER ----------
 def clean_text(text):
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)  # remove markdown bold
-    text = text.replace("```", "")  # remove code blocks
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = text.replace("```", "")
     return text
 
 
@@ -25,41 +29,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
 
     intro = f"""
-👋 Hello {user}!
+Hello {user},
 
-Main *Sahil Singh* hoon — AskSahilAI bot ka creator 😊
+I am *Sahil Singh*, creator of the AskSahilAI assistant.
 
-🤖 Ye ek AI Student Assistant hai jo specially students ki help ke liye banaya gaya hai.
+This AI assistant is designed to help students with:
+• Programming and coding
+• Academic concepts
+• Final year projects
+• Career guidance
 
-Main help kar sakta hoon:
-📚 Study doubts
-💻 Coding & Programming
-🎓 Final year projects
-🧠 Career guidance
+You can type your question directly, or use:
 
-Commands use karo:
-/help  - sab features
-/notes - study material
-/projectideas - project ideas
-/roadmap - coding path
-
-Aap mujhse normal chat bhi kar sakte ho 🙂
+/help – list commands
+/notes – study resources
+/projectideas – project suggestions
+/roadmap – learning path
 """
 
     await update.message.reply_text(intro, parse_mode="Markdown")
 
 
-# ---------- HELP COMMAND ----------
+# ---------- HELP ----------
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-🤖 AskSahilAI Commands
+Available Commands:
 
-/notes - Important CS/IT subjects study material
+/notes - Important CS/IT study resources
 /projectideas - Final year project ideas
-/roadmap - Coding learning roadmap
-/help - Commands list
+/roadmap - Programming learning path
 
-Ya phir directly question pucho 🙂
+You can also ask any academic or technical question.
 """
     await update.message.reply_text(text)
 
@@ -67,7 +67,7 @@ Ya phir directly question pucho 🙂
 # ---------- NOTES ----------
 async def notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-📚 Important Subjects
+Study Resources:
 
 DBMS:
 https://www.geeksforgeeks.org/dbms/
@@ -80,8 +80,6 @@ https://www.geeksforgeeks.org/computer-network-tutorials/
 
 Data Structures:
 https://www.geeksforgeeks.org/data-structures/
-
-Tip: Roz thoda padhoge to semester easy ho jayega 💪
 """
     await update.message.reply_text(text)
 
@@ -89,7 +87,7 @@ Tip: Roz thoda padhoge to semester easy ho jayega 💪
 # ---------- PROJECT IDEAS ----------
 async def projectideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-💡 Final Year Project Ideas
+Final Year Project Ideas:
 
 1. AI Resume Analyzer
 2. Face Recognition Attendance System
@@ -97,8 +95,6 @@ async def projectideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 4. Fake News Detection System
 5. Smart Timetable Generator
 6. Online Code Compiler
-
-Detail chahiye to pucho 🙂
 """
     await update.message.reply_text(text)
 
@@ -106,16 +102,14 @@ Detail chahiye to pucho 🙂
 # ---------- ROADMAP ----------
 async def roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-🧠 Coding Roadmap (Beginner to Job)
+Programming Roadmap:
 
-STEP 1 → Python Basics (2 weeks)
-STEP 2 → Data Structures
-STEP 3 → Git & GitHub
-STEP 4 → Web Development (HTML CSS JS)
-STEP 5 → Projects banana start
-STEP 6 → Internship apply
-
-Daily 2-3 hours = 6 months me job ready 🚀
+Step 1: Learn Python Basics
+Step 2: Data Structures
+Step 3: Git & GitHub
+Step 4: Web Development
+Step 5: Build Projects
+Step 6: Apply for Internship
 """
     await update.message.reply_text(text)
 
@@ -123,23 +117,39 @@ Daily 2-3 hours = 6 months me job ready 🚀
 # ---------- AI CHAT ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    user = update.effective_user.first_name
+    userid = update.effective_user.id
+
+    # 📊 SEND DATA TO GOOGLE SHEET
+    try:
+        data = {
+            "userid": userid,
+            "name": user,
+            "message": user_text
+        }
+        requests.post(GOOGLE_SCRIPT_URL, json=data)
+    except:
+        pass
 
     try:
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
+            temperature=0.3,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are AskSahilAI, an academic and professional student assistant created by Sahil Singh. "
-                        "Your tone must be polite, clear, and professional. "
-                        "Do NOT use slang words like 'meri jaan', 'bro', 'buddy', emojis, flirting, or casual greetings. "
-                        "Reply in simple Hinglish but in a teacher-like educational style. "
-                        "Give structured answers with headings and short paragraphs. "
-                        "Focus only on study help, coding help, project guidance and career guidance. "
-                        "Do not behave like a friend or entertainment chatbot."
-                    ),
-                    ),
+                        "You are AskSahilAI created by Sahil Singh. "
+                        "You are an intelligent assistant for students. "
+                        "You can both chat normally AND help in studies."
+
+                        "If the user greets or talks casually, respond in a friendly natural way."
+                        "If the user asks academic, coding, project, or career questions, respond like a teacher with structured explanation."
+
+                        "Be polite, clear, and helpful."
+                        "Do not flirt, do not use inappropriate language."
+                        "Keep answers concise but informative."
+                ),
                 },
                 {"role": "user", "content": user_text},
             ],
@@ -150,7 +160,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(e)
-        reply = "⚠️ Server thoda busy hai, 10 sec baad try karo."
+        reply = "The server is temporarily busy. Please try again in a few seconds."
 
     await update.message.reply_text(reply)
 
@@ -167,4 +177,3 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
-
