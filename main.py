@@ -12,7 +12,7 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxXXfTQAsWk7BkRvEWkdaLy2Dc45xsbsK7ADhWlNK8Jc06Ley4pME69uDdFaW1BAHm-eA/exec"
 
-# memory cache
+# conversation memory
 user_memory = {}
 
 client = OpenAI(
@@ -20,15 +20,18 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-# -------- CLEAN RESPONSE ----------
+# ---------- CLEAN TEXT ----------
 def clean_text(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = text.replace("```", "")
     return text
 
 
-# -------- WEB SEARCH FUNCTION ----------
+# ---------- WEB SEARCH ----------
 def web_search(query):
+    if not SERPER_API_KEY:
+        return ""
+
     try:
         url = "https://google.serper.dev/search"
         headers = {
@@ -37,28 +40,30 @@ def web_search(query):
         }
         payload = json.dumps({"q": query})
 
-        res = requests.post(url, headers=headers, data=payload)
+        res = requests.post(url, headers=headers, data=payload, timeout=10)
         data = res.json()
 
         snippets = []
         for item in data.get("organic", [])[:5]:
-            snippets.append(item["snippet"])
+            snippets.append(item.get("snippet", ""))
 
         return "\n".join(snippets)
 
-    except:
+    except Exception as e:
+        print("Search error:", e)
         return ""
 
 
-# -------- START ----------
+# ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
-    await update.message.reply_text(
-f"""Hello {user},
+
+    await update.message.reply_text(f"""
+Hello {user} 👋
 
 I am AskSahilAI 🤖
 
-You can talk to me like ChatGPT.
+You can chat with me like ChatGPT.
 I also use internet search for latest information.
 
 Ask anything:
@@ -67,50 +72,62 @@ Ask anything:
 • Career
 • News
 • Life advice
-• General knowledge
 
 Command:
 /image prompt
-"""
-)
+""")
 
 
-# -------- IMAGE ----------
+# ---------- IMAGE (FIXED) ----------
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
 
     if not prompt:
-        await update.message.reply_text("Usage: /image robot teacher in classroom")
+        await update.message.reply_text("Usage: /image futuristic AI classroom")
         return
 
-    url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
-    await update.message.reply_photo(photo=url)
+    try:
+        img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
+        img_data = requests.get(img_url, timeout=60).content
+
+        file_path = "generated.png"
+        with open(file_path, "wb") as f:
+            f.write(img_data)
+
+        await update.message.reply_photo(
+            photo=open(file_path, "rb"),
+            caption=f"Generated image for: {prompt}"
+        )
+
+    except Exception as e:
+        print("Image error:", e)
+        await update.message.reply_text("Image generation failed. Try another prompt.")
 
 
-# -------- CHAT ----------
+# ---------- CHAT ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # ---------- MEMORY ----------
+    # create memory
     if user_id not in user_memory:
         user_memory[user_id] = []
 
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # ---------- SAVE USER MESSAGE ----------
+    # save user message
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
             "userid": user_id,
             "role": "user",
             "message": user_text
-        })
+        }, timeout=5)
     except:
         pass
 
-    # ---------- INTERNET SEARCH ----------
+    # get internet context
     search_results = web_search(user_text)
 
     try:
@@ -118,20 +135,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {
                 "role": "system",
                 "content": f"""
-You are AskSahilAI, an advanced conversational assistant like ChatGPT.
+You are AskSahilAI, a conversational assistant similar to ChatGPT.
 
-You remember conversation context and continue the same topic when user asks follow-up questions like:
-why, how, explain more, continue, what about that.
+Continue previous topic if user asks follow-up questions like:
+why, explain more, continue, how, what about that.
 
-If the question needs latest information, use this real-time web data:
-
+Use this real-time web information if useful:
 {search_results}
 
-You help with:
-studies, coding, career guidance, personal advice, motivation, general knowledge, and news.
-
-Be clear, intelligent and helpful.
-Never give dangerous or illegal instructions.
+Help with study, coding, career, general knowledge and personal advice.
+Be clear and helpful. Never give illegal or harmful guidance.
 """
             }
         ] + user_memory[user_id]
@@ -142,31 +155,30 @@ Never give dangerous or illegal instructions.
             messages=messages
         )
 
-        reply = chat.choices[0].message.content
-        reply = clean_text(reply)
+        reply = clean_text(chat.choices[0].message.content)
 
-        # save assistant reply in memory
+        # save reply
         user_memory[user_id].append({"role": "assistant", "content": reply})
 
-        # save assistant reply to sheet
         try:
             requests.post(GOOGLE_SCRIPT_URL, json={
                 "userid": user_id,
                 "role": "assistant",
                 "message": reply
-            })
+            }, timeout=5)
         except:
             pass
 
     except Exception as e:
-        print(e)
-        reply = "Server busy. Try again in a few seconds."
+        print("AI error:", e)
+        reply = "Server busy. Please try again."
 
     await update.message.reply_text(reply)
 
 
-# -------- RUN ----------
+# ---------- RUN ----------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("image", image))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
