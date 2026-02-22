@@ -13,7 +13,7 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxXXfTQAsWk7BkRvEWkdaLy2Dc45xsbsK7ADhWlNK8Jc06Ley4pME69uDdFaW1BAHm-eA/exec"
 
-# conversation memory
+# memory
 user_memory = {}
 
 client = OpenAI(
@@ -21,7 +21,7 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- CLEAN TEXT ----------
+# ---------- CLEAN ----------
 def clean_text(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = text.replace("```", "")
@@ -32,15 +32,10 @@ def clean_text(text):
 def web_search(query):
     if not SERPER_API_KEY:
         return ""
-
     try:
         url = "https://google.serper.dev/search"
-        headers = {
-            "X-API-KEY": SERPER_API_KEY,
-            "Content-Type": "application/json"
-        }
+        headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
         payload = json.dumps({"q": query})
-
         res = requests.post(url, headers=headers, data=payload, timeout=10)
         data = res.json()
 
@@ -49,63 +44,58 @@ def web_search(query):
             snippets.append(item.get("snippet", ""))
 
         return "\n".join(snippets)
-
-    except Exception as e:
-        print("Search error:", e)
+    except:
         return ""
 
 
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
-
     await update.message.reply_text(f"""
 Hello {user} 👋
 
 I am AskSahilAI 🤖
-
 You can chat with me like ChatGPT.
-I also use internet search for latest information.
 
-Ask anything:
-• Studies
-• Coding
-• Career
-• News
-• Life advice
+I can:
+• Answer questions
+• Help in study
+• Give career advice
+• Generate images
+• Provide latest info
 
-Commands:
-/image prompt
+Try:
+career options after BMS infographic
+draw solar system
+latest AI news
 """)
 
 
-# ---------- IMAGE (FINAL WORKING) ----------
-async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prompt = " ".join(context.args)
-
-    if not prompt:
-        await update.message.reply_text("Usage: /image futuristic AI classroom")
-        return
-
+# ---------- IMAGE FUNCTION ----------
+async def send_image(update, prompt):
     try:
         img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
         response = requests.get(img_url, timeout=60)
 
         if response.status_code != 200:
-            await update.message.reply_text("Image server busy. Try again.")
-            return
+            return False
 
         image_bytes = BytesIO(response.content)
         image_bytes.name = "ai.png"
 
-        await update.message.reply_photo(
-            photo=image_bytes,
-            caption=f"Generated image for: {prompt}"
-        )
+        await update.message.reply_photo(photo=image_bytes, caption=f"Image: {prompt}")
+        return True
+    except:
+        return False
 
-    except Exception as e:
-        print("IMAGE ERROR:", e)
-        await update.message.reply_text("Image generation failed. Try another prompt.")
+
+# ---------- /IMAGE COMMAND ----------
+async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("Usage: /image robot teacher in classroom")
+        return
+    await send_image(update, prompt)
 
 
 # ---------- CHAT ----------
@@ -114,14 +104,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # memory create
+    # ===== AUTO IMAGE DETECTION =====
+    image_keywords = [
+        "draw","generate image","create image","show image","picture",
+        "photo","wallpaper","illustration","diagram","chart",
+        "infographic","poster","logo","sketch","visualize"
+    ]
+
+    if any(word in user_text.lower() for word in image_keywords):
+        success = await send_image(update, user_text)
+        if success:
+            return
+
+    # ===== MEMORY =====
     if user_id not in user_memory:
         user_memory[user_id] = []
 
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # save user message to sheet
+    # ===== SAVE USER MSG =====
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
             "userid": user_id,
@@ -131,27 +133,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # internet data
+    # ===== WEB SEARCH =====
     search_results = web_search(user_text)
 
     try:
-        messages = [
-            {
-                "role": "system",
-                "content": f"""
-You are AskSahilAI, a conversational assistant similar to ChatGPT.
+        messages = [{
+            "role": "system",
+            "content": f"""
+You are AskSahilAI, an intelligent conversational assistant.
 
-Continue previous topic if user asks follow-up questions like:
+Continue previous topic when user asks:
 why, explain more, continue, how, what about that.
 
-Use this real-time web information if useful:
+Use this internet data if helpful:
 {search_results}
 
-Help with study, coding, career, general knowledge and personal advice.
-Be clear and helpful. Never give illegal or harmful guidance.
+Help with studies, career, coding, general knowledge and life advice.
+Be clear and helpful.
 """
-            }
-        ] + user_memory[user_id]
+        }] + user_memory[user_id]
 
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -161,7 +161,6 @@ Be clear and helpful. Never give illegal or harmful guidance.
 
         reply = clean_text(chat.choices[0].message.content)
 
-        # save reply
         user_memory[user_id].append({"role": "assistant", "content": reply})
 
         try:
@@ -174,7 +173,7 @@ Be clear and helpful. Never give illegal or harmful guidance.
             pass
 
     except Exception as e:
-        print("AI error:", e)
+        print(e)
         reply = "Server busy. Please try again."
 
     await update.message.reply_text(reply)
