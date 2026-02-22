@@ -10,7 +10,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxweVv2IzlVR_9ZWxpc922hmdl4eXPcv9dRcX3IS20eTG2jc5UXKwmUANxK99UioeTSUw/exec"
+GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
 
 # ---------- AI CLIENT ----------
 client = OpenAI(
@@ -237,4 +237,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
 
 print("Bot running...")
 app.run_polling()
+
 
