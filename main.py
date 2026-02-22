@@ -2,6 +2,7 @@ import os
 import re
 import json
 import requests
+from io import BytesIO
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -73,12 +74,12 @@ Ask anything:
 • News
 • Life advice
 
-Command:
+Commands:
 /image prompt
 """)
 
 
-# ---------- IMAGE (FIXED) ----------
+# ---------- IMAGE (FINAL WORKING) ----------
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
 
@@ -88,19 +89,22 @@ async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
-        img_data = requests.get(img_url, timeout=60).content
+        response = requests.get(img_url, timeout=60)
 
-        file_path = "generated.png"
-        with open(file_path, "wb") as f:
-            f.write(img_data)
+        if response.status_code != 200:
+            await update.message.reply_text("Image server busy. Try again.")
+            return
+
+        image_bytes = BytesIO(response.content)
+        image_bytes.name = "ai.png"
 
         await update.message.reply_photo(
-            photo=open(file_path, "rb"),
+            photo=image_bytes,
             caption=f"Generated image for: {prompt}"
         )
 
     except Exception as e:
-        print("Image error:", e)
+        print("IMAGE ERROR:", e)
         await update.message.reply_text("Image generation failed. Try another prompt.")
 
 
@@ -110,14 +114,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # create memory
+    # memory create
     if user_id not in user_memory:
         user_memory[user_id] = []
 
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # save user message
+    # save user message to sheet
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
             "userid": user_id,
@@ -127,7 +131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # get internet context
+    # internet data
     search_results = web_search(user_text)
 
     try:
