@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import requests
 from openai import OpenAI
 from telegram import Update
@@ -7,11 +8,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-# Google Sheet Logging URL
-GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzdXrvhSPFdHberD2ruE4yxiTRfYwo2oKxRNPZH543H53nF1GjPeJNtqJimFMXivDbiXw/exec"
+GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxXXfTQAsWk7BkRvEWkdaLy2Dc45xsbsK7ADhWlNK8Jc06Ley4pME69uDdFaW1BAHm-eA/exec"
 
-# Groq client
+# memory cache
+user_memory = {}
+
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
@@ -24,167 +27,148 @@ def clean_text(text):
     return text
 
 
-# -------- START INTRO ----------
+# -------- WEB SEARCH FUNCTION ----------
+def web_search(query):
+    try:
+        url = "https://google.serper.dev/search"
+        headers = {
+            "X-API-KEY": SERPER_API_KEY,
+            "Content-Type": "application/json"
+        }
+        payload = json.dumps({"q": query})
+
+        res = requests.post(url, headers=headers, data=payload)
+        data = res.json()
+
+        snippets = []
+        for item in data.get("organic", [])[:5]:
+            snippets.append(item["snippet"])
+
+        return "\n".join(snippets)
+
+    except:
+        return ""
+
+
+# -------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
+    await update.message.reply_text(
+f"""Hello {user},
 
-    intro = f"""
-Hello {user},
+I am AskSahilAI 🤖
 
-I am Sahil Singh, creator of AskSahilAI.
+You can talk to me like ChatGPT.
+I also use internet search for latest information.
 
-This assistant can help you with:
-• Study doubts
-• Coding & programming
-• Career guidance
-• Project ideas
-• Personal guidance & motivation
+Ask anything:
+• Studies
+• Coding
+• Career
+• News
+• Life advice
+• General knowledge
 
-You can chat normally with me or ask any question.
-
-Use:
-/help – see features
-/notes – study material
-/projectideas – project ideas
-/roadmap – learning path
+Command:
+/image prompt
 """
-
-    await update.message.reply_text(intro)
-
-
-# -------- HELP ----------
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-Available Commands:
-
-/notes - Important CS/IT study resources
-/projectideas - Final year project ideas
-/roadmap - Programming learning path
-
-You can also ask:
-• Study questions
-• Career confusion
-• Motivation or stress help
-• Normal conversation
-"""
-    await update.message.reply_text(text)
+)
 
 
-# -------- NOTES ----------
-async def notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-Study Resources:
+# -------- IMAGE ----------
+async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = " ".join(context.args)
 
-DBMS:
-https://www.geeksforgeeks.org/dbms/
+    if not prompt:
+        await update.message.reply_text("Usage: /image robot teacher in classroom")
+        return
 
-Operating System:
-https://www.geeksforgeeks.org/operating-systems/
-
-Computer Networks:
-https://www.geeksforgeeks.org/computer-network-tutorials/
-
-Data Structures:
-https://www.geeksforgeeks.org/data-structures/
-"""
-    await update.message.reply_text(text)
+    url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
+    await update.message.reply_photo(photo=url)
 
 
-# -------- PROJECT IDEAS ----------
-async def projectideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-Final Year Project Ideas:
-
-1. AI Resume Analyzer
-2. Face Recognition Attendance System
-3. College Q&A Chatbot
-4. Fake News Detection System
-5. Smart Timetable Generator
-6. Online Code Compiler
-"""
-    await update.message.reply_text(text)
-
-
-# -------- ROADMAP ----------
-async def roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-Programming Roadmap:
-
-Step 1: Learn Python Basics
-Step 2: Data Structures
-Step 3: Git & GitHub
-Step 4: Web Development
-Step 5: Build Projects
-Step 6: Apply for Internship
-"""
-    await update.message.reply_text(text)
-
-
-# -------- AI CHAT ----------
+# -------- CHAT ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    user = update.effective_user.first_name
-    userid = update.effective_user.id
 
-    # ---- LOG USER DATA TO GOOGLE SHEET ----
+    user_text = update.message.text
+    user_id = update.effective_user.id
+
+    # ---------- MEMORY ----------
+    if user_id not in user_memory:
+        user_memory[user_id] = []
+
+    user_memory[user_id].append({"role": "user", "content": user_text})
+    user_memory[user_id] = user_memory[user_id][-15:]
+
+    # ---------- SAVE USER MESSAGE ----------
     try:
-        data = {
-            "userid": userid,
-            "name": user,
+        requests.post(GOOGLE_SCRIPT_URL, json={
+            "userid": user_id,
+            "role": "user",
             "message": user_text
-        }
-        requests.post(GOOGLE_SCRIPT_URL, json=data)
+        })
     except:
         pass
 
+    # ---------- INTERNET SEARCH ----------
+    search_results = web_search(user_text)
+
     try:
+        messages = [
+            {
+                "role": "system",
+                "content": f"""
+You are AskSahilAI, an advanced conversational assistant like ChatGPT.
+
+You remember conversation context and continue the same topic when user asks follow-up questions like:
+why, how, explain more, continue, what about that.
+
+If the question needs latest information, use this real-time web data:
+
+{search_results}
+
+You help with:
+studies, coding, career guidance, personal advice, motivation, general knowledge, and news.
+
+Be clear, intelligent and helpful.
+Never give dangerous or illegal instructions.
+"""
+            }
+        ] + user_memory[user_id]
+
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.5,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are AskSahilAI created by Sahil Singh, a student life assistant AI. "
-
-                        "You can do both normal conversation and serious help."
-
-                        "If user greets, chat normally and politely."
-
-                        "If user asks study, coding, or career questions, explain like a teacher in clear simple English."
-
-                        "If user shares personal problems (stress, sadness, family issues, confusion), respond supportively like a mentor. "
-                        "Give practical suggestions, motivation, and step-by-step advice."
-
-                        "Never flirt, never insult, never use inappropriate language."
-
-                        "If user shows severe emotional distress, encourage them to talk to a trusted person like a friend, parent, teacher, or counselor."
-
-                        "Keep answers clear, structured, and easy to understand."
-                    ),
-                },
-                {"role": "user", "content": user_text},
-            ],
+            temperature=0.7,
+            messages=messages
         )
 
         reply = chat.choices[0].message.content
         reply = clean_text(reply)
 
+        # save assistant reply in memory
+        user_memory[user_id].append({"role": "assistant", "content": reply})
+
+        # save assistant reply to sheet
+        try:
+            requests.post(GOOGLE_SCRIPT_URL, json={
+                "userid": user_id,
+                "role": "assistant",
+                "message": reply
+            })
+        except:
+            pass
+
     except Exception as e:
         print(e)
-        reply = "The server is temporarily busy. Please try again in a few seconds."
+        reply = "Server busy. Try again in a few seconds."
 
     await update.message.reply_text(reply)
 
 
-# -------- RUN BOT ----------
+# -------- RUN ----------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_command))
-app.add_handler(CommandHandler("notes", notes))
-app.add_handler(CommandHandler("projectideas", projectideas))
-app.add_handler(CommandHandler("roadmap", roadmap))
+app.add_handler(CommandHandler("image", image))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
