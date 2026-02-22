@@ -28,6 +28,18 @@ def clean_text(text):
     return text
 
 
+# ---------- PROMPT CLEANER (IMPORTANT) ----------
+def clean_prompt(text):
+    remove_words = [
+        "draw", "create", "generate", "make", "show",
+        "give me", "please", "can you", "image of", "picture of"
+    ]
+    text = text.lower()
+    for w in remove_words:
+        text = text.replace(w, "")
+    return text.strip()
+
+
 # ---------- WEB SEARCH ----------
 def web_search(query):
     if not SERPER_API_KEY:
@@ -57,43 +69,42 @@ Hello {user} 👋
 I am AskSahilAI 🤖
 You can chat with me like ChatGPT.
 
-I can:
-• Answer questions
-• Help in study
-• Give career advice
-• Generate images
-• Provide latest info
-
-Try:
-career options after BMS infographic
+You can ask anything or just type:
 draw solar system
+career options after BMS infographic
 latest AI news
 """)
 
 
-# ---------- IMAGE FUNCTION ----------
+# ---------- IMAGE SENDER ----------
 async def send_image(update, prompt):
     try:
-        img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
-        response = requests.get(img_url, timeout=60)
+        prompt = clean_prompt(prompt)
 
+        if len(prompt) < 3:
+            return False
+
+        img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
+
+        response = requests.get(img_url, timeout=60)
         if response.status_code != 200:
             return False
 
         image_bytes = BytesIO(response.content)
         image_bytes.name = "ai.png"
 
-        await update.message.reply_photo(photo=image_bytes, caption=f"Image: {prompt}")
+        await update.message.reply_photo(photo=image_bytes, caption=f"🖼️ {prompt}")
         return True
-    except:
+    except Exception as e:
+        print("IMAGE ERROR:", e)
         return False
 
 
-# ---------- /IMAGE COMMAND ----------
+# ---------- /IMAGE ----------
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("Usage: /image robot teacher in classroom")
+        await update.message.reply_text("Usage: /image futuristic AI classroom")
         return
     await send_image(update, prompt)
 
@@ -104,16 +115,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # ===== AUTO IMAGE DETECTION =====
-    image_keywords = [
-        "draw","generate image","create image","show image","picture",
-        "photo","wallpaper","illustration","diagram","chart",
-        "infographic","poster","logo","sketch","visualize"
+    # ===== STRONG AUTO IMAGE ROUTER =====
+    image_triggers = [
+        "draw","image","picture","photo","diagram","chart",
+        "infographic","poster","sketch","illustration","wallpaper"
     ]
 
-    if any(word in user_text.lower() for word in image_keywords):
-        success = await send_image(update, user_text)
-        if success:
+    lower = user_text.lower()
+
+    if any(word in lower for word in image_triggers):
+        sent = await send_image(update, user_text)
+        if sent:
             return
 
     # ===== MEMORY =====
@@ -123,7 +135,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # ===== SAVE USER MSG =====
+    # ===== LOG USER =====
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
             "userid": user_id,
@@ -133,23 +145,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # ===== WEB SEARCH =====
+    # ===== SEARCH =====
     search_results = web_search(user_text)
 
     try:
         messages = [{
             "role": "system",
             "content": f"""
-You are AskSahilAI, an intelligent conversational assistant.
+You are AskSahilAI, a helpful conversational assistant like ChatGPT.
 
-Continue previous topic when user asks:
-why, explain more, continue, how, what about that.
+If user asks follow-ups (why, how, explain more), continue same topic.
 
 Use this internet data if helpful:
 {search_results}
 
-Help with studies, career, coding, general knowledge and life advice.
-Be clear and helpful.
+Give clear and helpful answers.
 """
         }] + user_memory[user_id]
 
@@ -173,15 +183,14 @@ Be clear and helpful.
             pass
 
     except Exception as e:
-        print(e)
-        reply = "Server busy. Please try again."
+        print("AI ERROR:", e)
+        reply = "Server busy. Try again."
 
     await update.message.reply_text(reply)
 
 
 # ---------- RUN ----------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("image", image))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
