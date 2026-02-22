@@ -21,23 +21,42 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- CLEAN ----------
+# ---------- TEXT CLEAN ----------
 def clean_text(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = text.replace("```", "")
     return text
 
 
-# ---------- PROMPT CLEANER (IMPORTANT) ----------
-def clean_prompt(text):
-    remove_words = [
-        "draw", "create", "generate", "make", "show",
-        "give me", "please", "can you", "image of", "picture of"
-    ]
-    text = text.lower()
-    for w in remove_words:
-        text = text.replace(w, "")
-    return text.strip()
+# ---------- AI IMAGE PROMPT ENGINE ----------
+def generate_image_prompt(user_text):
+    try:
+        prompt_ai = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            temperature=0.4,
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+You convert user request into perfect image generation prompt.
+
+Rules:
+- Only output prompt
+- No explanation
+- If educational → labeled diagram or infographic
+- If object → realistic
+- If place → cinematic realistic scene
+- Add: high detail, clean background, sharp focus, 4k, professional lighting
+"""
+                },
+                {"role": "user", "content": user_text}
+            ]
+        )
+
+        return prompt_ai.choices[0].message.content.strip()
+
+    except:
+        return user_text
 
 
 # ---------- WEB SEARCH ----------
@@ -67,24 +86,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Hello {user} 👋
 
 I am AskSahilAI 🤖
-You can chat with me like ChatGPT.
 
-You can ask anything or just type:
+You can chat with me or just type:
+
 draw solar system
+human heart diagram
 career options after BMS infographic
 latest AI news
 """)
 
 
-# ---------- IMAGE SENDER ----------
+# ---------- IMAGE GENERATOR ----------
 async def send_image(update, prompt):
+
     try:
-        prompt = clean_prompt(prompt)
+        # AI makes best prompt
+        final_prompt = generate_image_prompt(prompt)
 
-        if len(prompt) < 3:
-            return False
-
-        img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
+        img_url = f"https://image.pollinations.ai/prompt/{final_prompt.replace(' ', '%20')}?width=1024&height=1024&seed=7"
 
         response = requests.get(img_url, timeout=60)
         if response.status_code != 200:
@@ -93,8 +112,24 @@ async def send_image(update, prompt):
         image_bytes = BytesIO(response.content)
         image_bytes.name = "ai.png"
 
+        # send image
         await update.message.reply_photo(photo=image_bytes, caption=f"🖼️ {prompt}")
+
+        # ----- EXPLANATION -----
+        explanation = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            temperature=0.5,
+            messages=[
+                {"role": "system", "content": "Explain the topic simply for a student in short clear points."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        text = clean_text(explanation.choices[0].message.content)
+        await update.message.reply_text(text)
+
         return True
+
     except Exception as e:
         print("IMAGE ERROR:", e)
         return False
@@ -104,7 +139,7 @@ async def send_image(update, prompt):
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("Usage: /image futuristic AI classroom")
+        await update.message.reply_text("Usage: /image solar system diagram")
         return
     await send_image(update, prompt)
 
@@ -115,27 +150,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # ===== STRONG AUTO IMAGE ROUTER =====
+    # AUTO IMAGE DETECTION
     image_triggers = [
-        "draw","image","picture","photo","diagram","chart",
-        "infographic","poster","sketch","illustration","wallpaper"
+        "draw","diagram","chart","infographic","sketch",
+        "illustration","poster","picture","image","photo"
     ]
 
-    lower = user_text.lower()
-
-    if any(word in lower for word in image_triggers):
+    if any(word in user_text.lower() for word in image_triggers):
         sent = await send_image(update, user_text)
         if sent:
             return
 
-    # ===== MEMORY =====
+    # MEMORY
     if user_id not in user_memory:
         user_memory[user_id] = []
 
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # ===== LOG USER =====
+    # LOG USER
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
             "userid": user_id,
@@ -145,7 +178,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # ===== SEARCH =====
+    # WEB SEARCH
     search_results = web_search(user_text)
 
     try:
@@ -154,12 +187,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "content": f"""
 You are AskSahilAI, a helpful conversational assistant like ChatGPT.
 
-If user asks follow-ups (why, how, explain more), continue same topic.
+Continue topic if user asks why/how/explain more.
 
-Use this internet data if helpful:
+Use this internet info if useful:
 {search_results}
-
-Give clear and helpful answers.
 """
         }] + user_memory[user_id]
 
@@ -172,15 +203,6 @@ Give clear and helpful answers.
         reply = clean_text(chat.choices[0].message.content)
 
         user_memory[user_id].append({"role": "assistant", "content": reply})
-
-        try:
-            requests.post(GOOGLE_SCRIPT_URL, json={
-                "userid": user_id,
-                "role": "assistant",
-                "message": reply
-            }, timeout=5)
-        except:
-            pass
 
     except Exception as e:
         print("AI ERROR:", e)
