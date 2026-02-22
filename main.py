@@ -11,9 +11,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxXXfTQAsWk7BkRvEWkdaLy2Dc45xsbsK7ADhWlNK8Jc06Ley4pME69uDdFaW1BAHm-eA/exec"
-
-# memory
+# Memory storage
 user_memory = {}
 
 client = OpenAI(
@@ -33,77 +31,65 @@ def generate_image_prompt(user_text):
     try:
         prompt_ai = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.4,
+            temperature=0.3,
             messages=[
                 {
                     "role": "system",
                     "content": """
-You convert user request into perfect image generation prompt.
+You are an image prompt engineer.
+
+Convert the user request into a perfect image prompt.
 
 Rules:
+- Never explain anything
 - Only output prompt
-- No explanation
-- If educational → labeled diagram or infographic
-- If object → realistic
-- If place → cinematic realistic scene
-- Add: high detail, clean background, sharp focus, 4k, professional lighting
+- Educational topics → clean labeled diagram
+- Career topics → infographic
+- Object → realistic
+- Add: high detail, sharp focus, clean background, professional lighting, 4k
 """
                 },
                 {"role": "user", "content": user_text}
             ]
         )
-
         return prompt_ai.choices[0].message.content.strip()
 
     except:
         return user_text
 
 
-# ---------- WEB SEARCH ----------
-def web_search(query):
-    if not SERPER_API_KEY:
-        return ""
-    try:
-        url = "https://google.serper.dev/search"
-        headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-        payload = json.dumps({"q": query})
-        res = requests.post(url, headers=headers, data=payload, timeout=10)
-        data = res.json()
-
-        snippets = []
-        for item in data.get("organic", [])[:5]:
-            snippets.append(item.get("snippet", ""))
-
-        return "\n".join(snippets)
-    except:
-        return ""
-
-
-# ---------- START ----------
+# ---------- START MESSAGE ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
+
     await update.message.reply_text(f"""
-Hello {user} 👋
+👋 Welcome {user}
 
-I am AskSahilAI 🤖
+I am *AskSahilAI* — your personal AI learning & productivity assistant.
 
-You can chat with me or just type:
+I can help you with:
+• Study concepts & explanations
+• Coding & programming help
+• Career guidance
+• Visual diagrams & educational images
+• Latest information
 
-draw solar system
-human heart diagram
-career options after BMS infographic
-latest AI news
-""")
+You can type your question naturally.
+
+Try:
+• solar system diagram
+• explain python simply
+• career options after BMS in India
+• latest AI news
+""", parse_mode="Markdown")
 
 
-# ---------- IMAGE GENERATOR ----------
+# ---------- IMAGE GENERATION ----------
 async def send_image(update, prompt):
-
     try:
-        # AI makes best prompt
         final_prompt = generate_image_prompt(prompt)
 
-        img_url = f"https://image.pollinations.ai/prompt/{final_prompt.replace(' ', '%20')}?width=1024&height=1024&seed=7"
+        img_url = f"https://image.pollinations.ai/prompt/{final_prompt.replace(' ', '%20')}?width=1024&height=1024&seed=5"
 
         response = requests.get(img_url, timeout=60)
         if response.status_code != 200:
@@ -113,14 +99,20 @@ async def send_image(update, prompt):
         image_bytes.name = "ai.png"
 
         # send image
-        await update.message.reply_photo(photo=image_bytes, caption=f"🖼️ {prompt}")
+        await update.message.reply_photo(
+            photo=image_bytes,
+            caption="Generated educational visual"
+        )
 
-        # ----- EXPLANATION -----
+        # explanation
         explanation = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             temperature=0.5,
             messages=[
-                {"role": "system", "content": "Explain the topic simply for a student in short clear points."},
+                {
+                    "role": "system",
+                    "content": "Explain this topic clearly in short bullet points for a student."
+                },
                 {"role": "user", "content": prompt}
             ]
         )
@@ -135,11 +127,11 @@ async def send_image(update, prompt):
         return False
 
 
-# ---------- /IMAGE ----------
+# ---------- /IMAGE COMMAND ----------
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("Usage: /image solar system diagram")
+        await update.message.reply_text("Usage: /image human heart diagram")
         return
     await send_image(update, prompt)
 
@@ -150,10 +142,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
 
-    # AUTO IMAGE DETECTION
+    # IMAGE PRIORITY ROUTER
     image_triggers = [
-        "draw","diagram","chart","infographic","sketch",
-        "illustration","poster","picture","image","photo"
+        "draw","diagram","chart","infographic","sketch","illustration",
+        "poster","picture","image","photo","visualize","structure","labeled"
     ]
 
     if any(word in user_text.lower() for word in image_triggers):
@@ -168,29 +160,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_memory[user_id].append({"role": "user", "content": user_text})
     user_memory[user_id] = user_memory[user_id][-15:]
 
-    # LOG USER
-    try:
-        requests.post(GOOGLE_SCRIPT_URL, json={
-            "userid": user_id,
-            "role": "user",
-            "message": user_text
-        }, timeout=5)
-    except:
-        pass
-
-    # WEB SEARCH
-    search_results = web_search(user_text)
-
     try:
         messages = [{
             "role": "system",
-            "content": f"""
-You are AskSahilAI, a helpful conversational assistant like ChatGPT.
+            "content": """
+You are AskSahilAI, an advanced AI assistant created by Sahil Singh.
 
-Continue topic if user asks why/how/explain more.
-
-Use this internet info if useful:
-{search_results}
+IMPORTANT RULES:
+- Never create ASCII diagrams
+- Never give drawing instructions
+- Continue same topic when user says why/explain more
+- Be clear, structured and professional
 """
         }] + user_memory[user_id]
 
@@ -206,7 +186,7 @@ Use this internet info if useful:
 
     except Exception as e:
         print("AI ERROR:", e)
-        reply = "Server busy. Try again."
+        reply = "Server busy. Please try again."
 
     await update.message.reply_text(reply)
 
