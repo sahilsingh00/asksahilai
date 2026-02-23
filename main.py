@@ -1,6 +1,8 @@
 import os
 import re
 import requests
+import tempfile
+import ffmpeg
 from io import BytesIO
 from openai import OpenAI
 from telegram import Update
@@ -12,22 +14,24 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
 
-# ---------- AI CLIENT ----------
+# ---------------- AI CLIENT ----------------
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- MEMORY ----------
+# ---------------- MEMORY ----------------
 user_memory = {}
 
-# ---------- CLEAN TEXT ----------
+# ---------------- CLEAN TEXT ----------------
 def clean_text(text):
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = text.replace("```", "")
-    return text
+    text = text.replace("__", "*")
+    text = text.replace("**", "*")
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
-# ---------- SAVE CHAT ----------
+# ---------------- SAVE CHAT ----------------
 def save_chat(userid, name, role, message):
     try:
         payload = {
@@ -40,7 +44,7 @@ def save_chat(userid, name, role, message):
     except Exception as e:
         print("Sheet Error:", e)
 
-# ---------- WEB SEARCH ----------
+# ---------------- WEB SEARCH ----------------
 def web_search(query):
     if not SERPER_API_KEY:
         return ""
@@ -48,7 +52,7 @@ def web_search(query):
     try:
         url = "https://google.serper.dev/search"
         headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-        response = requests.post(url, headers=headers, json={"q": query}, timeout=10)
+        response = requests.post(url, headers=headers, json={"q": query}, timeout=8)
         data = response.json()
 
         snippets = []
@@ -60,14 +64,27 @@ def web_search(query):
     except:
         return ""
 
-# ---------- IMAGE PROMPT ----------
+# ---------------- SPEECH TO TEXT ----------------
+def speech_to_text(file_path):
+    try:
+        with open(file_path, "rb") as audio:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio
+            )
+        return transcript.text
+    except Exception as e:
+        print("STT ERROR:", e)
+        return None
+
+# ---------------- IMAGE PROMPT ENGINE ----------------
 def generate_image_prompt(user_text):
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             temperature=0.3,
             messages=[
-                {"role":"system","content":"Convert request into a professional image prompt. Educational = labeled diagram. Career = infographic. Object = realistic photo. Only output prompt."},
+                {"role":"system","content":"Convert into a professional image prompt. Diagram=educational labeled, career=infographic, object=realistic 4k photo. Only output prompt."},
                 {"role":"user","content":user_text}
             ]
         )
@@ -75,30 +92,30 @@ def generate_image_prompt(user_text):
     except:
         return user_text
 
-# ---------- IMAGE DETECTION ----------
+# ---------------- IMAGE REQUEST DETECTION ----------------
 def is_image_request(text):
     t = text.lower()
+
     starters = ["draw ","create ","generate ","make ","show "]
     if any(t.startswith(s) for s in starters):
         return True
 
-    image_words = ["image","picture","photo","diagram","chart","infographic","sketch"]
+    image_words = ["image","picture","photo","diagram","chart","infographic","sketch","poster"]
     if any(w in t for w in image_words):
         return True
 
-    if len(t.split()) <= 2:  # single word auto visual
+    if len(t.split()) <= 2:
         return True
 
     return False
 
-# ---------- IMAGE GENERATION ----------
+# ---------------- IMAGE GENERATION ----------------
 async def send_image(update, prompt):
 
     user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
+    name = update.effective_user.first_name
 
-    # log user prompt also
-    save_chat(user_id, user_name, "user", prompt)
+    save_chat(user_id, name, "user_image", prompt)
 
     try:
         final_prompt = generate_image_prompt(prompt)
@@ -114,11 +131,10 @@ async def send_image(update, prompt):
 
         await update.message.reply_photo(photo=img, caption="Generated Visual")
 
-        # explanation
         explanation = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role":"system","content":"Explain the topic in clear short student-friendly points."},
+                {"role":"system","content":"Explain the topic simply in short student-friendly points."},
                 {"role":"user","content":prompt}
             ]
         )
@@ -126,31 +142,29 @@ async def send_image(update, prompt):
         text = clean_text(explanation.choices[0].message.content)
         await update.message.reply_text(text)
 
-        # log explanation
-        save_chat(user_id, user_name, "assistant", text)
-
+        save_chat(user_id, name, "assistant", text)
         return True
 
     except Exception as e:
-        print("Image Error:", e)
+        print("IMAGE ERROR:", e)
         return False
 
-# ---------- START ----------
+# ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name
     user_id = update.effective_user.id
 
     msg = f"""Hello {name} 👋
 
-I am AskSahilAI — your personal AI learning assistant.
+I am AskSahilAI — your AI learning & personal assistant.
 
 You can:
-• Study doubts
-• Maths solving
+• Solve maths
 • Coding help
 • Career guidance
 • Latest news
-• Generate images & diagrams
+• Generate images
+• Voice doubts
 
 Try:
 cat
@@ -159,34 +173,69 @@ latest AI news
 python roadmap chart
 """
 
-    save_chat(user_id, name, "user", "/start")
     save_chat(user_id, name, "assistant", msg)
-
     await update.message.reply_text(msg)
 
-# ---------- CHAT ----------
+# ---------------- VOICE HANDLER ----------------
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.effective_user
+    user_id = user.id
+    name = user.first_name
+
+    try:
+        file = await update.message.voice.get_file()
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp:
+            await file.download_to_drive(temp.name)
+            ogg_path = temp.name
+
+        wav_path = ogg_path.replace(".ogg", ".wav")
+
+        (
+            ffmpeg
+            .input(ogg_path)
+            .output(wav_path, ar=16000)
+            .overwrite_output()
+            .run(quiet=True)
+        )
+
+        text = speech_to_text(wav_path)
+
+        if not text:
+            await update.message.reply_text("Sorry, I couldn't understand the voice.")
+            return
+
+        await update.message.reply_text(f"You said:\n{text}")
+
+        save_chat(user_id, name, "user_voice", text)
+
+        update.message.text = text
+        await handle_message(update, context)
+
+    except Exception as e:
+        print("VOICE ERROR:", e)
+        await update.message.reply_text("Voice processing failed.")
+
+# ---------------- CHAT ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
     user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
+    name = update.effective_user.first_name
 
-    # IMAGE MODE
     if is_image_request(user_text):
         if await send_image(update, user_text):
             return
 
-    # LOG USER MESSAGE
-    save_chat(user_id, user_name, "user", user_text)
+    save_chat(user_id, name, "user", user_text)
 
-    # MEMORY
     if user_id not in user_memory:
         user_memory[user_id] = []
 
     user_memory[user_id].append({"role":"user","content":user_text})
     user_memory[user_id] = user_memory[user_id][-12:]
 
-    # INTERNET SEARCH
     search_results = web_search(user_text)
 
     system_prompt = f"""
@@ -197,15 +246,12 @@ Roles:
 - Maths solver (step-by-step)
 - Coding mentor
 - Career advisor
-- General assistant
+- News assistant
 
-Use internet info if needed:
+Use real-time internet info if useful:
 {search_results}
 
-Rules:
-Continue conversation context.
-If follow-up question asked, continue topic.
-Explain clearly and professionally.
+Continue context. Be clear and professional.
 """
 
     try:
@@ -222,20 +268,17 @@ Explain clearly and professionally.
         user_memory[user_id].append({"role":"assistant","content":reply})
 
     except Exception as e:
-        print("AI Error:", e)
+        print("AI ERROR:", e)
         reply = "Server busy. Try again."
 
-    # LOG BOT REPLY
-    save_chat(user_id, user_name, "assistant", reply)
-
+    save_chat(user_id, name, "assistant", reply)
     await update.message.reply_text(reply)
 
-# ---------- RUN ----------
+# ---------------- RUN ----------------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start",start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_message))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
-
-
