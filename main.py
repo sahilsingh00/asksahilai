@@ -13,16 +13,16 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
 
-# ---------- GROQ CLIENT ----------
+# -------- GROQ AI CLIENT --------
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# ---------- MEMORY ----------
+# -------- USER MEMORY --------
 user_memory = {}
 
-# ---------- CLEAN ----------
+# -------- TEXT FORMAT FIX --------
 def clean_text(text):
     text = text.replace("```", "")
     text = text.replace("__", "*")
@@ -30,7 +30,7 @@ def clean_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-# ---------- SAVE CHAT ----------
+# -------- GOOGLE SHEET LOGGER --------
 def save_chat(userid, name, role, message):
     try:
         requests.post(GOOGLE_SCRIPT_URL, json={
@@ -38,11 +38,11 @@ def save_chat(userid, name, role, message):
             "name": str(name),
             "role": role,
             "message": message
-        }, timeout=5)
+        }, timeout=4)
     except:
         pass
 
-# ---------- WEB SEARCH ----------
+# -------- LIVE INTERNET SEARCH (REAL DATA) --------
 def web_search(query):
     if not SERPER_API_KEY:
         return ""
@@ -50,19 +50,27 @@ def web_search(query):
     try:
         url = "https://google.serper.dev/search"
         headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-        response = requests.post(url, headers=headers, json={"q": query}, timeout=8)
-        data = response.json()
+        res = requests.post(url, headers=headers, json={"q": query}, timeout=8)
+        data = res.json()
 
-        snippets = []
+        results = []
         for item in data.get("organic", [])[:5]:
-            snippets.append(item.get("snippet", ""))
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            link = item.get("link", "")
+            results.append(f"{title}\n{snippet}\nSource: {link}")
 
-        return "\n".join(snippets)
+        return "\n\n".join(results)
 
     except:
         return ""
 
-# ---------- IMAGE DETECTION ----------
+# -------- NEWS DETECTION --------
+def is_news_query(text):
+    words = ["news","latest","today","update","current affairs","recent","what happened"]
+    return any(w in text.lower() for w in words)
+
+# -------- IMAGE DETECTION --------
 def is_image_request(text):
     t = text.lower()
 
@@ -79,10 +87,17 @@ def is_image_request(text):
 
     return False
 
-# ---------- IMAGE ----------
+# -------- IMAGE GENERATOR --------
 async def send_image(update, prompt):
+
+    user = update.effective_user
+    user_id = user.id
+    name = user.first_name
+
+    save_chat(user_id, name, "user_image", prompt)
+
     try:
-        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024"
+        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024&seed=7&enhance=true"
         r = requests.get(url, timeout=60)
 
         if r.status_code != 200:
@@ -92,11 +107,26 @@ async def send_image(update, prompt):
         img.name = "ai.png"
 
         await update.message.reply_photo(photo=img, caption="🖼 Generated Image")
+
+        # explanation
+        explanation = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role":"system","content":"Explain this topic clearly in short bullet points for a student."},
+                {"role":"user","content":prompt}
+            ]
+        )
+
+        text = clean_text(explanation.choices[0].message.content)
+        await update.message.reply_text(text)
+
+        save_chat(user_id, name, "assistant", text)
         return True
+
     except:
         return False
 
-# ---------- AI BRAIN ----------
+# -------- AI CORE --------
 async def process_ai(update, user_text):
 
     user = update.effective_user
@@ -113,23 +143,31 @@ async def process_ai(update, user_text):
 
     search_results = web_search(user_text)
 
-    system_prompt = f"""
-You are AskSahilAI created by Sahil Singh.
+    # NEWS MODE
+    if is_news_query(user_text):
+        system_prompt = f"""
+You must ONLY use the real search results below.
+Do NOT invent news.
 
-Roles:
-• Personal tutor
-• Maths solver (step by step)
-• Coding mentor
-• Career advisor
-• News assistant
-
-Use real-time info:
+Real data:
 {search_results}
 
+Summarize latest news in bullet points with sources.
+"""
+    else:
+        system_prompt = f"""
+You are AskSahilAI created by Sahil Singh.
+
+You act as:
+• Personal Tutor
+• Maths Solver (step by step)
+• Coding Mentor
+• Career Advisor
+
 Rules:
-Continue conversation context.
-Answer professionally.
-Use bullet points.
+- Continue conversation context
+- Follow-up questions must continue same topic
+- Give structured answers
 """
 
     try:
@@ -137,21 +175,20 @@ Use bullet points.
 
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.6,
+            temperature=0.5,
             messages=messages
         )
 
         reply = clean_text(chat.choices[0].message.content)
         user_memory[user_id].append({"role":"assistant","content":reply})
 
-    except Exception as e:
-        print("AI ERROR:", e)
-        reply = "AI server busy. Please try again."
+    except:
+        reply = "AI server busy. Try again."
 
     save_chat(user_id, name, "assistant", reply)
     await update.message.reply_text(reply, parse_mode="Markdown")
 
-# ---------- TEXT ----------
+# -------- TEXT HANDLER --------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
@@ -161,7 +198,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await process_ai(update, text)
 
-# ---------- VOICE (FINAL WORKING) ----------
+# -------- VOICE HANDLER (WORKING) --------
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
@@ -182,27 +219,21 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = transcript.text.strip()
 
-        if not text:
-            await update.message.reply_text("I couldn't understand the voice.")
-            return
-
         await update.message.reply_text(f"🎤 You said:\n{text}")
-
         await process_ai(update, text)
 
         os.remove(audio_path)
 
-    except Exception as e:
-        print("VOICE ERROR:", e)
-        await update.message.reply_text("Voice processing failed. Please try again.")
+    except:
+        await update.message.reply_text("Voice processing failed. Speak clearly and try again.")
 
-# ---------- START ----------
+# -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hello 👋\n\nI am AskSahilAI — your AI assistant.\nSend text, image prompt or voice message."
+        "👋 Hello!\nI am AskSahilAI — Your Personal AI Assistant.\n\nYou can ask anything or send voice or image request."
     )
 
-# ---------- RUN ----------
+# -------- RUN --------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.VOICE, handle_voice))
