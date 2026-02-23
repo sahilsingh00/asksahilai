@@ -3,6 +3,8 @@ import re
 import requests
 import tempfile
 import ffmpeg
+import tempfile
+import subprocess
 from io import BytesIO
 from openai import OpenAI
 from telegram import Update
@@ -165,12 +167,6 @@ You can:
 • Latest news
 • Generate images
 • Voice doubts
-
-Try:
-cat
-solve 2x+5=15
-latest AI news
-python roadmap chart
 """
 
     save_chat(user_id, name, "assistant", msg)
@@ -184,38 +180,48 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = user.first_name
 
     try:
-        file = await update.message.voice.get_file()
+        # download telegram voice
+        voice = await update.message.voice.get_file()
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp:
-            await file.download_to_drive(temp.name)
-            ogg_path = temp.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_ogg:
+            await voice.download_to_drive(temp_ogg.name)
+            ogg_path = temp_ogg.name
 
+        # convert to wav properly
         wav_path = ogg_path.replace(".ogg", ".wav")
 
-        (
-            ffmpeg
-            .input(ogg_path)
-            .output(wav_path, ar=16000)
-            .overwrite_output()
-            .run(quiet=True)
-        )
+        import subprocess
+        subprocess.run([
+            "ffmpeg",
+            "-i", ogg_path,
+            "-ar", "16000",
+            "-ac", "1",
+            wav_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        text = speech_to_text(wav_path)
+        # speech recognition
+        with open(wav_path, "rb") as audio:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio
+            )
+
+        text = transcript.text
 
         if not text:
-            await update.message.reply_text("Sorry, I couldn't understand the voice.")
+            await update.message.reply_text("I could not understand the voice.")
             return
 
-        await update.message.reply_text(f"You said:\n{text}")
+        # show recognized text
+        await update.message.reply_text(f"🧠 I understood:\n{text}")
 
-        save_chat(user_id, name, "user_voice", text)
-
+        # send to AI chat
         update.message.text = text
         await handle_message(update, context)
 
     except Exception as e:
         print("VOICE ERROR:", e)
-        await update.message.reply_text("Voice processing failed.")
+        await update.message.reply_text("Voice processing failed. Please try again.")
 
 # ---------------- CHAT ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -282,3 +288,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
