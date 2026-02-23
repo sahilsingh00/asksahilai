@@ -2,8 +2,6 @@ import os
 import re
 import requests
 import tempfile
-import ffmpeg
-import tempfile
 import subprocess
 from io import BytesIO
 from openai import OpenAI
@@ -42,7 +40,7 @@ def save_chat(userid, name, role, message):
             "role": role,
             "message": message
         }
-        requests.post(GOOGLE_SCRIPT_URL, json=payload, timeout=6)
+        requests.post(GOOGLE_SCRIPT_URL, json=payload, timeout=5)
     except Exception as e:
         print("Sheet Error:", e)
 
@@ -66,19 +64,6 @@ def web_search(query):
     except:
         return ""
 
-# ---------------- SPEECH TO TEXT ----------------
-def speech_to_text(file_path):
-    try:
-        with open(file_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio
-            )
-        return transcript.text
-    except Exception as e:
-        print("STT ERROR:", e)
-        return None
-
 # ---------------- IMAGE PROMPT ENGINE ----------------
 def generate_image_prompt(user_text):
     try:
@@ -86,7 +71,7 @@ def generate_image_prompt(user_text):
             model="llama-3.1-8b-instant",
             temperature=0.3,
             messages=[
-                {"role":"system","content":"Convert into a professional image prompt. Diagram=educational labeled, career=infographic, object=realistic 4k photo. Only output prompt."},
+                {"role":"system","content":"Convert into a professional image prompt. Educational = labeled diagram, career = infographic, object = realistic photo. Only output prompt."},
                 {"role":"user","content":user_text}
             ]
         )
@@ -94,7 +79,7 @@ def generate_image_prompt(user_text):
     except:
         return user_text
 
-# ---------------- IMAGE REQUEST DETECTION ----------------
+# ---------------- IMAGE DETECTOR ----------------
 def is_image_request(text):
     t = text.lower()
 
@@ -111,13 +96,11 @@ def is_image_request(text):
 
     return False
 
-# ---------------- IMAGE GENERATION ----------------
+# ---------------- IMAGE GENERATOR ----------------
 async def send_image(update, prompt):
 
-    user_id = update.effective_user.id
-    name = update.effective_user.first_name
-
-    save_chat(user_id, name, "user_image", prompt)
+    user = update.effective_user
+    save_chat(user.id, user.first_name, "user_image", prompt)
 
     try:
         final_prompt = generate_image_prompt(prompt)
@@ -131,12 +114,12 @@ async def send_image(update, prompt):
         img = BytesIO(r.content)
         img.name = "ai.png"
 
-        await update.message.reply_photo(photo=img, caption="Generated Visual")
+        await update.message.reply_photo(photo=img, caption="🖼 Generated Image")
 
         explanation = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role":"system","content":"Explain the topic simply in short student-friendly points."},
+                {"role":"system","content":"Explain this topic simply in bullet points for a student."},
                 {"role":"user","content":prompt}
             ]
         )
@@ -144,95 +127,19 @@ async def send_image(update, prompt):
         text = clean_text(explanation.choices[0].message.content)
         await update.message.reply_text(text)
 
-        save_chat(user_id, name, "assistant", text)
+        save_chat(user.id, user.first_name, "assistant", text)
         return True
 
     except Exception as e:
         print("IMAGE ERROR:", e)
         return False
 
-# ---------------- START ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_user.first_name
-    user_id = update.effective_user.id
-
-    msg = f"""Hello {name} 👋
-
-I am AskSahilAI — your AI learning & personal assistant.
-
-You can:
-• Solve maths
-• Coding help
-• Career guidance
-• Latest news
-• Generate images
-• Voice doubts
-"""
-
-    save_chat(user_id, name, "assistant", msg)
-    await update.message.reply_text(msg)
-
-# ---------------- VOICE HANDLER ----------------
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- AI PROCESSOR (CORE BRAIN) ----------------
+async def process_ai(update, user_text):
 
     user = update.effective_user
     user_id = user.id
     name = user.first_name
-
-    try:
-        # download telegram voice
-        voice = await update.message.voice.get_file()
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_ogg:
-            await voice.download_to_drive(temp_ogg.name)
-            ogg_path = temp_ogg.name
-
-        # convert to wav properly
-        wav_path = ogg_path.replace(".ogg", ".wav")
-
-        import subprocess
-        subprocess.run([
-            "ffmpeg",
-            "-i", ogg_path,
-            "-ar", "16000",
-            "-ac", "1",
-            wav_path
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        # speech recognition
-        with open(wav_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio
-            )
-
-        text = transcript.text
-
-        if not text:
-            await update.message.reply_text("I could not understand the voice.")
-            return
-
-        # show recognized text
-        await update.message.reply_text(f"🧠 I understood:\n{text}")
-
-        # send to AI chat
-        update.message.text = text
-        await handle_message(update, context)
-
-    except Exception as e:
-        print("VOICE ERROR:", e)
-        await update.message.reply_text("Voice processing failed. Please try again.")
-
-# ---------------- CHAT ----------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_text = update.message.text
-    user_id = update.effective_user.id
-    name = update.effective_user.first_name
-
-    if is_image_request(user_text):
-        if await send_image(update, user_text):
-            return
 
     save_chat(user_id, name, "user", user_text)
 
@@ -247,17 +154,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     system_prompt = f"""
 You are AskSahilAI created by Sahil Singh.
 
-Roles:
-- Personal tutor
-- Maths solver (step-by-step)
-- Coding mentor
-- Career advisor
-- News assistant
+You act as:
+• Personal Tutor
+• Maths Solver (step-by-step)
+• Coding Mentor
+• Career Advisor
+• News Assistant
 
-Use real-time internet info if useful:
+Use real-time data if useful:
 {search_results}
 
-Continue context. Be clear and professional.
+Rules:
+- Continue previous conversation
+- Understand follow-up questions
+- Give accurate and structured answers
+- Format in bullet points when helpful
 """
 
     try:
@@ -265,27 +176,95 @@ Continue context. Be clear and professional.
 
         chat = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.7,
+            temperature=0.6,
             messages=messages
         )
 
         reply = clean_text(chat.choices[0].message.content)
-
         user_memory[user_id].append({"role":"assistant","content":reply})
 
     except Exception as e:
         print("AI ERROR:", e)
-        reply = "Server busy. Try again."
+        reply = "AI server busy. Please try again."
 
     save_chat(user_id, name, "assistant", reply)
-    await update.message.reply_text(reply)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+# ---------------- START ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.effective_user.first_name
+
+    msg = f"""Hello {name} 👋
+
+I am AskSahilAI — your intelligent AI assistant.
+
+You can:
+• Ask any question
+• Solve maths problems
+• Coding help
+• Career guidance
+• Latest news
+• Generate images
+• Send voice doubts
+"""
+
+    await update.message.reply_text(msg)
+
+# ---------------- TEXT HANDLER ----------------
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+
+    if is_image_request(user_text):
+        if await send_image(update, user_text):
+            return
+
+    await process_ai(update, user_text)
+
+# ---------------- VOICE HANDLER (FIXED) ----------------
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    try:
+        voice = await update.message.voice.get_file()
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_ogg:
+            await voice.download_to_drive(temp_ogg.name)
+            ogg_path = temp_ogg.name
+
+        wav_path = ogg_path.replace(".ogg", ".wav")
+
+        subprocess.run(
+            ["ffmpeg", "-i", ogg_path, "-ar", "16000", "-ac", "1", wav_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        with open(wav_path, "rb") as audio:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio
+            )
+
+        text = transcript.text
+
+        if not text:
+            await update.message.reply_text("I couldn't understand the voice.")
+            return
+
+        await update.message.reply_text(f"🎤 You said:\n{text}")
+
+        # Send to AI brain
+        await process_ai(update, text)
+
+    except Exception as e:
+        print("VOICE ERROR:", e)
+        await update.message.reply_text("Voice processing failed. Please try again.")
 
 # ---------------- RUN ----------------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
-
