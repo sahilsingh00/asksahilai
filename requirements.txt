@@ -1,5 +1,3 @@
 python-telegram-bot==21.6
 openai
 requests
-faster-whisper
-ffmpeg-python
