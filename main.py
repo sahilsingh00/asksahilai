@@ -8,6 +8,7 @@ from telegram import Update
 from supabase import create_client
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
+# ---------------- ENV ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
@@ -16,18 +17,17 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-#GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
-
-# -------- GROQ AI CLIENT --------
+# ---------------- GROQ CLIENT ----------------
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# -------- USER MEMORY --------
+# ---------------- MEMORY ----------------
 user_memory = {}
+active_conversations = {}
 
-# -------- TEXT FORMAT FIX --------
+# ---------------- CLEAN TEXT ----------------
 def clean_text(text):
     text = text.replace("```", "")
     text = text.replace("__", "*")
@@ -35,13 +35,14 @@ def clean_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-# -------- GOOGLE SHEET LOGGER --------
+# ---------------- SAVE CHAT (SUPABASE) ----------------
 def save_chat(userid, name, role, message):
     try:
-        # 1. user find or create
+
+        # ---- USER ----
         user = supabase.table("users").select("*").eq("platform_user_id", str(userid)).execute()
 
-        if len(user.data) == 0:
+        if not user.data:
             new_user = supabase.table("users").insert({
                 "platform": "telegram",
                 "platform_user_id": str(userid)
@@ -50,14 +51,17 @@ def save_chat(userid, name, role, message):
         else:
             db_user_id = user.data[0]["id"]
 
-        # 2. create conversation
-        conv = supabase.table("conversations").insert({
-            "user_id": db_user_id
-        }).execute()
+        # ---- CONVERSATION ----
+        if userid not in active_conversations:
+            conv = supabase.table("conversations").insert({
+                "user_id": db_user_id
+            }).execute()
+            conversation_id = conv.data[0]["id"]
+            active_conversations[userid] = conversation_id
+        else:
+            conversation_id = active_conversations[userid]
 
-        conversation_id = conv.data[0]["id"]
-
-        # 3. save message
+        # ---- SAVE MESSAGE ----
         supabase.table("messages").insert({
             "conversation_id": conversation_id,
             "role": role,
@@ -67,11 +71,28 @@ def save_chat(userid, name, role, message):
     except Exception as e:
         print("Supabase error:", e)
 
-# -------- LIVE INTERNET SEARCH (REAL DATA) --------
+# ---------------- LOAD MEMORY FROM DB ----------------
+def load_memory(user_id):
+    conv_id = active_conversations.get(user_id)
+    if not conv_id:
+        return []
+
+    old_msgs = supabase.table("messages") \
+        .select("*") \
+        .eq("conversation_id", conv_id) \
+        .order("id", desc=True) \
+        .limit(6) \
+        .execute()
+
+    history = []
+    for m in reversed(old_msgs.data):
+        history.append({"role": m["role"], "content": m["content"]})
+    return history
+
+# ---------------- WEB SEARCH ----------------
 def web_search(query):
     if not SERPER_API_KEY:
         return ""
-
     try:
         url = "https://google.serper.dev/search"
         headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
@@ -80,64 +101,42 @@ def web_search(query):
 
         results = []
         for item in data.get("organic", [])[:5]:
-            title = item.get("title", "")
-            snippet = item.get("snippet", "")
-            link = item.get("link", "")
-            results.append(f"{title}\n{snippet}\nSource: {link}")
+            results.append(f"{item.get('title')}\n{item.get('snippet')}\nSource: {item.get('link')}")
 
         return "\n\n".join(results)
-
     except:
         return ""
 
-# -------- NEWS DETECTION --------
-def is_news_query(text):
-    words = ["news","latest","today","update","current affairs","recent","what happened"]
-    return any(w in text.lower() for w in words)
-
-# -------- IMAGE DETECTION --------
+# ---------------- IMAGE DETECTION ----------------
 def is_image_request(text):
     t = text.lower()
-
     starters = ["draw ","create ","generate ","make ","show "]
     if any(t.startswith(s) for s in starters):
         return True
-
     image_words = ["image","picture","photo","diagram","chart","infographic","sketch","poster","wallpaper"]
     if any(w in t for w in image_words):
         return True
-
-    if len(t.split()) <= 2:
-        return True
-
     return False
 
-# -------- IMAGE GENERATOR --------
+# ---------------- IMAGE ----------------
 async def send_image(update, prompt):
-
     user = update.effective_user
     user_id = user.id
-    name = user.first_name
 
-    save_chat(user_id, name, "user_image", prompt)
+    save_chat(user_id, user.first_name, "user", prompt)
 
     try:
-        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024&seed=7&enhance=true"
+        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}"
         r = requests.get(url, timeout=60)
-
-        if r.status_code != 200:
-            return False
 
         img = BytesIO(r.content)
         img.name = "ai.png"
-
         await update.message.reply_photo(photo=img, caption="🖼 Generated Image")
 
-        # explanation
         explanation = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role":"system","content":"Explain this topic clearly in short bullet points for a student."},
+                {"role":"system","content":"Explain this topic in short bullet points."},
                 {"role":"user","content":prompt}
             ]
         )
@@ -145,13 +144,13 @@ async def send_image(update, prompt):
         text = clean_text(explanation.choices[0].message.content)
         await update.message.reply_text(text)
 
-        save_chat(user_id, name, "assistant", text)
+        save_chat(user_id, user.first_name, "assistant", text)
         return True
 
     except:
         return False
 
-# -------- AI CORE --------
+# ---------------- AI ----------------
 async def process_ai(update, user_text):
 
     user = update.effective_user
@@ -160,39 +159,17 @@ async def process_ai(update, user_text):
 
     save_chat(user_id, name, "user", user_text)
 
+    # memory load after restart
     if user_id not in user_memory:
-        user_memory[user_id] = []
+        user_memory[user_id] = load_memory(user_id)
 
     user_memory[user_id].append({"role":"user","content":user_text})
     user_memory[user_id] = user_memory[user_id][-12:]
 
-    search_results = web_search(user_text)
-
-    # NEWS MODE
-    if is_news_query(user_text):
-        system_prompt = f"""
-You must ONLY use the real search results below.
-Do NOT invent news.
-
-Real data:
-{search_results}
-
-Summarize latest news in bullet points with sources.
-"""
-    else:
-        system_prompt = f"""
+    system_prompt = """
 You are AskSahilAI created by Sahil Singh.
-
-You act as:
-• Personal Tutor
-• Maths Solver (step by step)
-• Coding Mentor
-• Career Advisor
-
-Rules:
-- Continue conversation context
-- Follow-up questions must continue same topic
-- Give structured answers
+You act as a tutor, coding mentor and career guide.
+Give clear structured answers.
 """
 
     try:
@@ -211,61 +188,25 @@ Rules:
         reply = "AI server busy. Try again."
 
     save_chat(user_id, name, "assistant", reply)
-    await update.message.reply_text(reply, parse_mode="Markdown")
+    await update.message.reply_text(reply)
 
-# -------- TEXT HANDLER --------
+# ---------------- HANDLERS ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-
     if is_image_request(text):
         if await send_image(update, text):
             return
-
     await process_ai(update, text)
 
-# -------- VOICE HANDLER (WORKING) --------
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    try:
-        await update.message.reply_text("🎧 Listening...")
-
-        voice = await update.message.voice.get_file()
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_audio:
-            await voice.download_to_drive(temp_audio.name)
-            audio_path = temp_audio.name
-
-        # GROQ Whisper
-        with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio_file
-            )
-
-        text = transcript.text.strip()
-
-        await update.message.reply_text(f"🎤 You said:\n{text}")
-        await process_ai(update, text)
-
-        os.remove(audio_path)
-
-    except:
-        await update.message.reply_text("Voice processing failed. Speak clearly and try again.")
-
-# -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Hello!\nI am AskSahilAI — Your Personal AI Assistant.\n\nYou can ask anything or send voice or image request."
+        "👋 Hello! I am AskSahilAI.\nSend message or voice."
     )
 
-# -------- RUN --------
+# ---------------- RUN ----------------
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
-
-
-
