@@ -11,7 +11,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
+#GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbym2x02NNp6kGJmXrKwv6dky7p9Qld0__dtfg5FDAF1z60tcNyaDcJz0Pg1aPc1lXPlEQ/exec"
 
 # -------- GROQ AI CLIENT --------
 client = OpenAI(
@@ -33,14 +33,34 @@ def clean_text(text):
 # -------- GOOGLE SHEET LOGGER --------
 def save_chat(userid, name, role, message):
     try:
-        requests.post(GOOGLE_SCRIPT_URL, json={
-            "userid": str(userid),
-            "name": str(name),
+        # 1. user find or create
+        user = supabase.table("users").select("*").eq("platform_user_id", str(userid)).execute()
+
+        if len(user.data) == 0:
+            new_user = supabase.table("users").insert({
+                "platform": "telegram",
+                "platform_user_id": str(userid)
+            }).execute()
+            db_user_id = new_user.data[0]["id"]
+        else:
+            db_user_id = user.data[0]["id"]
+
+        # 2. create conversation
+        conv = supabase.table("conversations").insert({
+            "user_id": db_user_id
+        }).execute()
+
+        conversation_id = conv.data[0]["id"]
+
+        # 3. save message
+        supabase.table("messages").insert({
+            "conversation_id": conversation_id,
             "role": role,
-            "message": message
-        }, timeout=4)
-    except:
-        pass
+            "content": message
+        }).execute()
+
+    except Exception as e:
+        print("Supabase error:", e)
 
 # -------- LIVE INTERNET SEARCH (REAL DATA) --------
 def web_search(query):
@@ -241,3 +261,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
