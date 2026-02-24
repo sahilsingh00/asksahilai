@@ -80,10 +80,9 @@ def load_history(conversation_id):
     return history
 
 # -------- AI --------
-async def process_ai(update, user_text):
+async def process_ai(chat_id, user_text, context):
 
-    user = update.effective_user
-    user_id = user.id
+    user_id = chat_id
 
     conversation_id = get_conversation_id(user_id)
 
@@ -115,7 +114,7 @@ Use simple language.
     # save assistant
     save_message(conversation_id, "assistant", reply)
 
-    await update.message.reply_text(reply, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
 # -------- VOICE HANDLER --------
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,7 +144,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # VERY IMPORTANT — background AI call
         await update.message.reply_text("🤖 Thinking...")
 
-        context.application.create_task(process_ai(update, user_text))
+        chat_id = update.effective_chat.id
+        context.application.create_task(process_ai(chat_id, user_text, context))
 
     except Exception as e:
         await update.message.reply_text("❌ Voice samajh nahi aaya. Thoda clear bolkar try karo.")
@@ -154,7 +154,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await update.message.reply_text("🤔 Thinking...")
-    context.application.create_task(process_ai(update, text))
+    chat_id = update.effective_chat.id
+    context.application.create_task(process_ai(chat_id, text, context))
 
 # -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,4 +172,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
 
