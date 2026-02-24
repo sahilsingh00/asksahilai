@@ -1,8 +1,9 @@
 python-telegram-bot==21.6
 openai
 requests
+supabase
+postgrest
+python-dotenv
 fastapi
 uvicorn
-supabase
 google-generativeai
-requests
