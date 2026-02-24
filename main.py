@@ -38,8 +38,7 @@ def clean_text(text):
 # ---------------- SAVE CHAT (SUPABASE) ----------------
 def save_chat(userid, name, role, message):
     try:
-
-        # ---- USER ----
+        # -------- USER --------
         user = supabase.table("users").select("*").eq("platform_user_id", str(userid)).execute()
 
         if not user.data:
@@ -51,17 +50,23 @@ def save_chat(userid, name, role, message):
         else:
             db_user_id = user.data[0]["id"]
 
-        # ---- CONVERSATION ----
-        if userid not in active_conversations:
-            conv = supabase.table("conversations").insert({
+        # -------- GET LAST CONVERSATION (IMPORTANT) --------
+        conv = supabase.table("conversations") \
+            .select("*") \
+            .eq("user_id", db_user_id) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if conv.data:
+            conversation_id = conv.data[0]["id"]
+        else:
+            new_conv = supabase.table("conversations").insert({
                 "user_id": db_user_id
             }).execute()
-            conversation_id = conv.data[0]["id"]
-            active_conversations[userid] = conversation_id
-        else:
-            conversation_id = active_conversations[userid]
+            conversation_id = new_conv.data[0]["id"]
 
-        # ---- SAVE MESSAGE ----
+        # -------- SAVE MESSAGE --------
         supabase.table("messages").insert({
             "conversation_id": conversation_id,
             "role": role,
@@ -70,7 +75,6 @@ def save_chat(userid, name, role, message):
 
     except Exception as e:
         print("Supabase error:", e)
-
 # ---------------- LOAD MEMORY FROM DB ----------------
 def load_memory(user_id):
     conv_id = active_conversations.get(user_id)
@@ -210,3 +214,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
