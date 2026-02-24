@@ -35,6 +35,13 @@ def clean_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+# ---------------- TELEGRAM MARKDOWN FIX ----------------
+def escape_markdown(text: str) -> str:
+    escape_chars = r"\_*[]()~`>#+-=|{}.!"
+    for ch in escape_chars:
+        text = text.replace(ch, "\\" + ch)
+    return text
+
 # ---------------- SAVE CHAT (SUPABASE) ----------------
 def save_chat(userid, name, role, message):
     try:
@@ -146,7 +153,8 @@ async def send_image(update, prompt):
         )
 
         text = clean_text(explanation.choices[0].message.content)
-        await update.message.reply_text(text)
+        safe_text = escape_markdown(reply)
+        await update.message.reply_text(safe_text, parse_mode="MarkdownV2")
 
         save_chat(user_id, user.first_name, "assistant", text)
         return True
@@ -214,4 +222,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
 
