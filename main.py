@@ -90,7 +90,7 @@ async def process_ai(update, user_text):
     # save user
     save_message(conversation_id, "user", user_text)
 
-    history = load_history(conversation_id)
+    history = load_history(conversation_id)[-5:]
 
     system_prompt = """
 You are AskSahilAI created by Sahil Singh.
@@ -119,17 +119,17 @@ Use simple language.
 
 # -------- VOICE HANDLER --------
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     try:
         await update.message.reply_text("🎧 Listening...")
 
-        # download voice file
         voice = await update.message.voice.get_file()
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_audio:
             await voice.download_to_drive(temp_audio.name)
             audio_path = temp_audio.name
 
-        # speech to text (Groq Whisper)
+        # speech to text
         with open(audio_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-large-v3",
@@ -137,14 +137,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         user_text = transcript.text.strip()
+        os.remove(audio_path)
 
-        # show what user said
+        # show transcript
         await update.message.reply_text(f"🗣 You said: {user_text}")
 
-        # send to AI
-        await process_ai(update, user_text)
+        # VERY IMPORTANT — background AI call
+        await update.message.reply_text("🤖 Thinking...")
 
-        os.remove(audio_path)
+        context.application.create_task(process_ai(update, user_text))
 
     except Exception as e:
         await update.message.reply_text("❌ Voice samajh nahi aaya. Thoda clear bolkar try karo.")
@@ -152,7 +153,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------- TEXT HANDLER --------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    await process_ai(update, text)
+    await update.message.reply_text("🤔 Thinking...")
+    context.application.create_task(process_ai(update, text))
 
 # -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,3 +171,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
