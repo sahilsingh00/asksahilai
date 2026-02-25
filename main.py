@@ -67,21 +67,26 @@ def save_message(conversation_id, role, content):
 
 # -------- LOAD MEMORY --------
 def load_history(conversation_id):
+
     msgs = supabase.table("messages") \
-        .select("*") \
+        .select("role,content") \
         .eq("conversation_id", conversation_id) \
-        .order("id", desc=True) \
-        .limit(8) \
+        .order("id") \
         .execute()
 
     history = []
-    for m in reversed(msgs.data):
-        history.append({"role": m["role"], "content": m["content"]})
+
+    for m in msgs.data[-10:]:  # last 10 messages only
+        if m["role"] in ["user","assistant"]:
+            history.append({
+                "role": m["role"],
+                "content": m["content"]
+            })
+
     return history
 
 # -------- AI --------
-async def process_ai(chat_id, user_text, context):
-
+async def process_ai(chat_id, user_text, context, reply_to_message_id):
     user_id = chat_id
 
     conversation_id = get_conversation_id(user_id)
@@ -114,41 +119,58 @@ Use simple language.
     # save assistant
     save_message(conversation_id, "assistant", reply)
 
-    await context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
+    await context.bot.send_message(
+    chat_id=chat_id,
+    text=reply,
+    parse_mode="Markdown",
+    reply_to_message_id=reply_to_message_id
+    )
 
 # -------- VOICE HANDLER --------
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
-        await update.message.reply_text("🎧 Listening...")
+        chat_id = update.effective_chat.id
+        msg_id = update.message.message_id
 
+        # instant response (prevents telegram timeout)
+        await context.bot.send_message(chat_id=chat_id, text="🎧 Listening...")
+
+        # download voice
         voice = await update.message.voice.get_file()
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_audio:
             await voice.download_to_drive(temp_audio.name)
             audio_path = temp_audio.name
 
-        # speech to text
+        # speech → text (Whisper)
         with open(audio_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
-                model="whisper-large-v3",
+                model="whisper-large-v3-turbo",
                 file=audio_file
             )
 
         user_text = transcript.text.strip()
+
+        # delete temp audio
         os.remove(audio_path)
 
         # show transcript
-        await update.message.reply_text(f"🗣 You said: {user_text}")
+        await context.bot.send_message(chat_id=chat_id, text=f"🗣 You said: {user_text}")
 
-        # VERY IMPORTANT — background AI call
-        await update.message.reply_text("🤖 Thinking...")
+        # tell user processing
+        await context.bot.send_message(chat_id=chat_id, text="🤔 Thinking...")
 
-        chat_id = update.effective_chat.id
-        context.application.create_task(process_ai(chat_id, user_text, context))
+        # BACKGROUND AI CALL (most important)
+        context.application.create_task(
+            process_ai(chat_id, user_text, context, msg_id)
+        )
 
     except Exception as e:
-        await update.message.reply_text("❌ Voice samajh nahi aaya. Thoda clear bolkar try karo.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Voice samajh nahi aaya. Clear bolkar try karo."
+        )
 
 # -------- TEXT HANDLER --------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,5 +194,6 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("Bot running...")
 app.run_polling()
+
 
 
